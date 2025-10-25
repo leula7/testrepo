@@ -1,0 +1,337 @@
+import React, { useCallback, useState, useRef, useEffect } from "react";
+import {
+  View,
+  Text,
+  FlatList,
+  SafeAreaView,
+  TouchableOpacity,
+  RefreshControl,
+  StyleSheet,
+  ActivityIndicator,
+} from "react-native";
+import Card from "../CustomTsx/Card";
+import Details from "../Modal/JobDetails";
+import Chat from "../Modal/Chat";
+import LoadingModal from "../Modal/LoadingModal";
+import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { useFocusEffect } from "expo-router";
+import { useSelector } from "react-redux";
+import { JobStatus } from "@/api/Influencer";
+import { sendMessage } from "@/api/All";
+import handleAxiosError from "@/api/AxiosError";
+import { showToast } from "../CustomTsx/ToastMessage";
+import { Job } from "@/type";
+import { styles } from "@/assets/styles/Card";
+
+const ApprovedJobs: React.FC = () => {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [detailVisible, setDetailVisible] = useState(false);
+  const [chatModalVisible, setChatModalVisible] = useState(false);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [showFullDesc, setShowFullDesc] = useState<{ [key: string]: boolean }>({});
+  const partnerIdRef = useRef<number>(0);
+
+  const token = useSelector((state: { token: string }) => state.token);
+  const theme = useSelector((state: any) => state.theme);
+  const my_user_id = useSelector((state: any) => state.my_user_id);
+  const currentStyles = theme === "dark" ? styles.dark : styles.light;
+
+  const filteredData = useSelector((state: any) =>
+    Array.isArray(state.jobs) ? state.jobs : []
+  );
+
+  // Update jobs from redux if different
+  useEffect(() => {
+    const isDifferent =
+      JSON.stringify(filteredData.map((j: Job) => j.job_id)) !==
+      JSON.stringify(jobs.map((j: Job) => j.job_id));
+    if (isDifferent) setJobs(filteredData);
+  }, [filteredData]);
+
+  // Fetch approved jobs
+  const fetchApprovedJobs = async (offset: number) => {
+    if (!hasMore || loading) return;
+    try {
+      setLoading(true);
+      const limit = 10;
+      const response = await JobStatus(token, "approve", limit, offset);
+      const data: Job[] = Array.isArray(response.data)
+        ? response.data.map((job: Job) => ({ ...job }))
+        : [];
+      setJobs((prev) => (offset === 0 ? data : [...prev, ...data]));
+      if (data.length < limit) setHasMore(false);
+    } catch (error) {
+      const response = handleAxiosError(error);
+      showToast({
+        type: "error",
+        title: "Fetching Approved Jobs",
+        message: response || "Approved Jobs fetch failed",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Focus effect (with cleanup)
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+      const load = async () => {
+        if (isActive) {
+          setJobs([]);
+          setHasMore(true);
+          await fetchApprovedJobs(0);
+        }
+      };
+      load();
+      return () => {
+        isActive = false;
+      };
+    }, [token])
+  );
+
+  // Pull-to-refresh
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setHasMore(true);
+    await fetchApprovedJobs(0);
+    setRefreshing(false);
+  };
+
+  // Handle Details modal open
+  const handlePressCard = (job: Job) => {
+    if (chatModalVisible) return; // prevent double modal
+    setSelectedJob(job);
+    setTimeout(() => setDetailVisible(true), 80);
+  };
+
+  // Handle Chat modal open
+  const handlePressChat = (job: Job) => {
+    if (detailVisible) return;
+    setSelectedJob(job);
+    partnerIdRef.current = job.creator_id;
+    setTimeout(() => setChatModalVisible(true), 80);
+  };
+
+  // Render single job card
+  const renderItem = useCallback(
+    ({ item }: { item: Job }) => {
+      const jobId = item.job_id;
+      const showFull = showFullDesc[jobId] || false;
+
+      return (
+        <Card
+          style={{
+            card: StyleSheet.flatten([
+              currentStyles.card,
+              item.count_unread > 0
+                ? { borderColor: "#34b7f1", borderWidth: 2 }
+                : {},
+            ]),
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => handlePressCard(item)}
+          >
+            {/* Header Row */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <View
+                style={{ flexDirection: "row", alignItems: "center", flexShrink: 1 }}
+              >
+                <Text
+                  style={[
+                    currentStyles.title,
+                    { textTransform: "capitalize", flexShrink: 1 },
+                    theme === "dark" ? { color: "#DDD" } : {},
+                  ]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {item.title}
+                </Text>
+                {item.is_premium === "1" && (
+                  <Ionicons
+                    name="star"
+                    size={18}
+                    color="#FFD700"
+                    style={{ marginLeft: 6 }}
+                  />
+                )}
+              </View>
+
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: "#28a745",
+                  paddingHorizontal: 8,
+                  paddingVertical: 2,
+                  borderRadius: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    color: "#fff",
+                    fontWeight: "bold",
+                    fontSize: 12,
+                  }}
+                >
+                   Approved
+                </Text>
+              </View>
+            </View>
+
+            {/* Description */}
+            <Text style={currentStyles.description}>
+              {item.description && item.description.length > 120 && !showFull
+                ? `${item.description.slice(0, 120)}...`
+                : item.description ?? "No description available"}
+            </Text>
+
+            {item.description && item.description.length > 120 && (
+              <TouchableOpacity
+                onPress={() =>
+                  setShowFullDesc((prev) => ({
+                    ...prev,
+                    [jobId]: !prev[jobId],
+                  }))
+                }
+              >
+                <Text style={{ color: theme === "dark" ? "#aaa" : "#000", marginTop: 4 }}>
+                  {showFull ? "View Less" : "View More"}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Unread Messages */}
+            {item.count_unread > 0 && (
+              <Text
+                style={{
+                  color: "#34b7f1",
+                  fontWeight: "bold",
+                  marginTop: 6,
+                }}
+              >
+                {item.count_unread} Unread Message
+                {item.count_unread > 1 ? "s" : ""}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Chat Button */}
+          <TouchableOpacity
+            onPress={() => handlePressChat(item)}
+            style={{
+              ...currentStyles.chat,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              marginTop: 10,
+            }}
+          >
+            <MaterialIcons
+              name="chat-bubble"
+              size={16}
+              color="white"
+              style={{ marginRight: 6 }}
+            />
+            <Text style={{ color: "white", fontWeight: "500" }}>Chat</Text>
+          </TouchableOpacity>
+        </Card>
+      );
+    },
+    [showFullDesc, currentStyles]
+  );
+
+  return (
+    <SafeAreaView style={currentStyles.container}>
+      {loading && jobs.length === 0 ? (
+        <ActivityIndicator
+          size="large"
+          color="#00ff00"
+          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+        />
+      ) : (
+        <FlatList
+          key={`approvedJobs-${jobs.length}`} // Force remount
+          data={jobs}
+          keyExtractor={(item) => item.job_id.toString()}
+          renderItem={renderItem}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ padding: 16 }}
+          onEndReached={() => fetchApprovedJobs(jobs.length)}
+          onEndReachedThreshold={0.5}
+          removeClippedSubviews={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={["#00ff00"]}
+            />
+          }
+          ListEmptyComponent={
+            <Text style={currentStyles.description}>
+              No approved jobs found
+            </Text>
+          }
+          ListFooterComponent={<View style={{ height: 80 }} />}
+        />
+      )}
+
+      {/* Only mount one modal at a time */}
+      {detailVisible && selectedJob && !chatModalVisible && (
+        <Details
+          job={selectedJob}
+          applied={true}
+          visible={true}
+          onClose={() => {
+            setDetailVisible(false);
+            setSelectedJob(null);
+          }}
+          onAdd={(job) => console.log("Job added:", job)}
+        />
+      )}
+
+      {chatModalVisible && selectedJob && (
+        <Chat
+          visible={true}
+          job={selectedJob}
+          partner_user_id={partnerIdRef.current}
+          onClose={() => setChatModalVisible(false)}
+          currentUserId={my_user_id || 0}
+          onSend={async (message) => {
+            if (!selectedJob) return;
+            try {
+              await sendMessage(token, {
+                sender_id: my_user_id,
+                reciver_id: selectedJob.creator_id,
+                job_id: selectedJob.job_id,
+                message,
+                status: "unread",
+              });
+            } catch (err) {
+              const response = handleAxiosError(err);
+              showToast({
+                type: "error",
+                title: "Message Failed",
+                message: response || "",
+              });
+            }
+          }}
+        />
+      )}
+    </SafeAreaView>
+  );
+};
+
+export default ApprovedJobs;
